@@ -44,6 +44,12 @@ Enable and start for a profile (e.g. `wg0`):
 sudo systemctl enable --now wgmon@wg0.service
 ```
 
+> **Note:** disable `wg-quick@wg0.service` if it's enabled — `wgmon` takes over managing the tunnel and they will conflict.
+>
+> ```bash
+> sudo systemctl disable --now wg-quick@wg0.service
+> ```
+
 Multiple profiles are independent:
 
 ```bash

@@ -50,7 +50,7 @@ async fn reconcile(
     // No WiFi → safe default: VPN up.
     // Any untrusted SSID → VPN up.
     // All trusted → VPN down.
-    let needs_vpn = ssids.is_empty() || ssids.iter().any(|s| !allowlist.contains(s));
+    let needs_vpn = needs_vpn(&ssids, allowlist);
     let ssids_changed = ssids != *prev_ssids;
 
     tracing::info!(
@@ -70,4 +70,65 @@ async fn reconcile(
     *prev_ssids = ssids;
 
     wgquick::wg_quick(if needs_vpn { "up" } else { "down" }, profile).await
+}
+
+fn needs_vpn(ssids: &HashSet<String>, allowlist: &HashSet<String>) -> bool {
+    ssids.is_empty() || ssids.iter().any(|s| !allowlist.contains(s))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn allowlist(names: &[&str]) -> HashSet<String> {
+        names.iter().map(|s| s.to_string()).collect()
+    }
+
+    fn ssids(names: &[&str]) -> HashSet<String> {
+        names.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn no_wifi_needs_vpn() {
+        assert!(needs_vpn(&ssids(&[]), &allowlist(&["Home"])));
+    }
+
+    #[test]
+    fn trusted_ssid_no_vpn() {
+        assert!(!needs_vpn(&ssids(&["Home"]), &allowlist(&["Home"])));
+    }
+
+    #[test]
+    fn untrusted_ssid_needs_vpn() {
+        assert!(needs_vpn(&ssids(&["CoffeeShop"]), &allowlist(&["Home"])));
+    }
+
+    #[test]
+    fn any_untrusted_wins() {
+        // Connected to both a trusted and untrusted SSID — VPN should come up.
+        assert!(needs_vpn(
+            &ssids(&["Home", "CoffeeShop"]),
+            &allowlist(&["Home"])
+        ));
+    }
+
+    #[test]
+    fn multiple_trusted_no_vpn() {
+        assert!(!needs_vpn(
+            &ssids(&["Home", "Work"]),
+            &allowlist(&["Home", "Work"])
+        ));
+    }
+
+    #[test]
+    fn config_parses() {
+        let raw = r#"allowlist = ["HomeNetwork", "WorkNetwork"]"#;
+        let config: Config = toml::from_str(raw).unwrap();
+        assert_eq!(config.allowlist, vec!["HomeNetwork", "WorkNetwork"]);
+    }
+
+    #[test]
+    fn empty_allowlist_always_needs_vpn() {
+        assert!(needs_vpn(&ssids(&["AnyNetwork"]), &allowlist(&[])));
+    }
 }
