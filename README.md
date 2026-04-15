@@ -1,0 +1,2 @@
+# wgmon
+WireGuard monitor
