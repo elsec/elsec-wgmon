@@ -4,7 +4,11 @@ mod wgquick;
 use dbus::{get_connected_ssids, watch_station_changes, watch_wake};
 use futures_util::StreamExt;
 use std::collections::HashSet;
+use std::time::Duration;
+use tokio::time;
 use zbus::Connection;
+
+const WATCHDOG_INTERVAL: Duration = Duration::from_secs(60);
 
 #[derive(serde::Deserialize)]
 struct Config {
@@ -32,6 +36,8 @@ async fn main() -> anyhow::Result<()> {
 
     let mut iwd_stream = watch_station_changes(&conn).await?;
     let mut wake_stream = watch_wake(&conn).await?;
+    let mut watchdog = time::interval(WATCHDOG_INTERVAL);
+    watchdog.tick().await; // discard the immediate first tick
 
     loop {
         tokio::select! {
@@ -44,6 +50,16 @@ async fn main() -> anyhow::Result<()> {
                 tracing::info!("system wake detected, forcing reconcile");
                 prev_ssids.clear();
                 reconcile(&conn, &profile, &allowlist, &mut prev_ssids).await?;
+            }
+            _ = watchdog.tick() => {
+                if let Some(age) = wgquick::latest_handshake_age(&profile).await {
+                    tracing::debug!(age_secs = age.as_secs(), "watchdog: handshake age");
+                    if age > wgquick::HANDSHAKE_TIMEOUT {
+                        tracing::warn!(age_secs = age.as_secs(), "peer silent, cycling tunnel");
+                        prev_ssids.clear();
+                        reconcile(&conn, &profile, &allowlist, &mut prev_ssids).await?;
+                    }
+                }
             }
         }
     }
