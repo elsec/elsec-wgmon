@@ -1,4 +1,5 @@
 mod dbus;
+mod killswitch;
 mod wgquick;
 
 use dbus::{get_connected_ssids, watch_station_changes, watch_wake};
@@ -90,11 +91,13 @@ async fn reconcile(
     *prev_ssids = ssids;
 
     if needs_vpn {
-        // Cycle so WireGuard re-establishes over the current network.
+        // Enable kill switch before cycling so there's no leak window.
+        killswitch::enable(profile).await?;
         wgquick::wg_quick("down", profile).await?;
         wgquick::wg_quick("up", profile).await
     } else {
-        wgquick::wg_quick("down", profile).await
+        wgquick::wg_quick("down", profile).await?;
+        killswitch::disable().await
     }
 }
 
