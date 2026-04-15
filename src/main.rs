@@ -31,9 +31,18 @@ async fn main() -> anyhow::Result<()> {
 
     let conn = Connection::system().await?;
 
-    // Install the kill switch before anything else so there is no leak
-    // window if the daemon restarts while on an untrusted network.
-    killswitch::enable(&profile).await?;
+    // Check current SSIDs before installing the kill switch — no point
+    // blocking traffic on a trusted network just because the daemon restarted.
+    // On an untrusted network we still install it immediately to close the
+    // restart leak window.
+    let startup_ssids: HashSet<String> = get_connected_ssids(&conn)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .collect();
+    if needs_vpn(&startup_ssids, &allowlist) {
+        killswitch::enable(&profile).await?;
+    }
 
     let result = run(&conn, &profile, &allowlist).await;
 
