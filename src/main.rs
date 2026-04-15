@@ -6,6 +6,7 @@ use dbus::{get_connected_ssids, watch_station_changes, watch_wake};
 use futures_util::StreamExt;
 use std::collections::HashSet;
 use std::time::Duration;
+use tokio::signal::unix::{signal, SignalKind};
 use tokio::time;
 use zbus::Connection;
 
@@ -39,6 +40,8 @@ async fn main() -> anyhow::Result<()> {
     let mut wake_stream = watch_wake(&conn).await?;
     let mut watchdog = time::interval(WATCHDOG_INTERVAL);
     watchdog.tick().await; // discard the immediate first tick
+    let mut sigterm = signal(SignalKind::terminate())?;
+    let mut sigint = signal(SignalKind::interrupt())?;
 
     loop {
         tokio::select! {
@@ -52,18 +55,38 @@ async fn main() -> anyhow::Result<()> {
                 prev_ssids.clear();
                 reconcile(&conn, &profile, &allowlist, &mut prev_ssids).await?;
             }
+            _ = sigterm.recv() => {
+                tracing::info!("SIGTERM received, shutting down");
+                break;
+            }
+            _ = sigint.recv() => {
+                tracing::info!("SIGINT received, shutting down");
+                break;
+            }
             _ = watchdog.tick() => {
-                if let Some(age) = wgquick::latest_handshake_age(&profile).await {
-                    tracing::debug!(age_secs = age.as_secs(), "watchdog: handshake age");
-                    if age > wgquick::HANDSHAKE_TIMEOUT {
-                        tracing::warn!(age_secs = age.as_secs(), "peer silent, cycling tunnel");
+                let vpn_should_be_up = needs_vpn(&prev_ssids, &allowlist);
+                match wgquick::latest_handshake_age(&profile).await {
+                    Some(age) => {
+                        tracing::debug!(age_secs = age.as_secs(), "watchdog: handshake age");
+                        if age > wgquick::HANDSHAKE_TIMEOUT {
+                            tracing::warn!(age_secs = age.as_secs(), "peer silent, cycling tunnel");
+                            prev_ssids.clear();
+                            reconcile(&conn, &profile, &allowlist, &mut prev_ssids).await?;
+                        }
+                    }
+                    None if vpn_should_be_up => {
+                        tracing::warn!("tunnel unexpectedly down, reconciling");
                         prev_ssids.clear();
                         reconcile(&conn, &profile, &allowlist, &mut prev_ssids).await?;
                     }
+                    None => {}
                 }
             }
         }
     }
+
+    tracing::info!("removing kill switch on exit");
+    killswitch::disable().await?;
 
     Ok(())
 }
