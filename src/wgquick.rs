@@ -17,7 +17,7 @@ pub async fn wg_quick(action: &str, profile: &str) -> anyhow::Result<()> {
     }
 
     tracing::error!("wg-quick {action} {profile} failed: {stderr}");
-    Ok(()) // log but don't crash — keep watching
+    anyhow::bail!("wg-quick {action} {profile} failed: {stderr}")
 }
 
 pub fn is_idempotent_error(action: &str, stderr: &str) -> bool {
