@@ -25,15 +25,13 @@ async fn main() -> anyhow::Result<()> {
 
     let conn = Connection::system().await?;
 
-    let mut prev_ssids: HashSet<String> = HashSet::new();
-
     // Initial reconciliation
-    reconcile(&conn, &profile, &allowlist, &mut prev_ssids).await?;
+    reconcile(&conn, &profile, &allowlist).await?;
 
     // Watch for changes
     let mut stream = watch_station_changes(&conn).await?;
     while stream.next().await.is_some() {
-        reconcile(&conn, &profile, &allowlist, &mut prev_ssids).await?;
+        reconcile(&conn, &profile, &allowlist).await?;
     }
 
     Ok(())
@@ -43,36 +41,26 @@ async fn reconcile(
     conn: &Connection,
     profile: &str,
     allowlist: &HashSet<String>,
-    prev_ssids: &mut HashSet<String>,
 ) -> anyhow::Result<()> {
-    let ssids: HashSet<String> = get_connected_ssids(conn).await?.into_iter().collect();
+    let ssids: Vec<String> = get_connected_ssids(conn).await?;
 
     // No WiFi → safe default: VPN up.
     // Any untrusted SSID → VPN up.
     // All trusted → VPN down.
     let needs_vpn = needs_vpn(&ssids, allowlist);
-    let ssids_changed = ssids != *prev_ssids;
 
-    tracing::info!(
-        ssids = ?ssids,
-        needs_vpn,
-        ssids_changed,
-        "reconciling"
-    );
+    tracing::info!(ssids = ?ssids, needs_vpn, "reconciling");
 
-    if needs_vpn && ssids_changed {
-        // SSIDs changed while VPN is needed — cycle the tunnel so WireGuard
-        // picks up the new underlying route/handshake.
-        tracing::info!("network change detected, cycling tunnel");
+    if needs_vpn {
+        // Always cycle so WireGuard re-establishes over the current network.
         wgquick::wg_quick("down", profile).await?;
+        wgquick::wg_quick("up", profile).await
+    } else {
+        wgquick::wg_quick("down", profile).await
     }
-
-    *prev_ssids = ssids;
-
-    wgquick::wg_quick(if needs_vpn { "up" } else { "down" }, profile).await
 }
 
-fn needs_vpn(ssids: &HashSet<String>, allowlist: &HashSet<String>) -> bool {
+fn needs_vpn(ssids: &[String], allowlist: &HashSet<String>) -> bool {
     ssids.is_empty() || ssids.iter().any(|s| !allowlist.contains(s))
 }
 
@@ -84,7 +72,7 @@ mod tests {
         names.iter().map(|s| s.to_string()).collect()
     }
 
-    fn ssids(names: &[&str]) -> HashSet<String> {
+    fn ssids(names: &[&str]) -> Vec<String> {
         names.iter().map(|s| s.to_string()).collect()
     }
 
