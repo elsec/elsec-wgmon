@@ -1,0 +1,16 @@
+[Unit]
+Description=WireGuard auto-connect for %i based on WiFi SSID (via iwd)
+After=iwd.service network.target
+Wants=iwd.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/wgmon %i
+Restart=on-failure
+RestartSec=5s
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=wgmon@%i
+
+[Install]
+WantedBy=multi-user.target
