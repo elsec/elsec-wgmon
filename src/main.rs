@@ -109,7 +109,16 @@ async fn reconcile(
     // All trusted → VPN down.
     let needs_vpn = needs_vpn(&ssids, allowlist);
 
-    tracing::info!(ssids = ?ssids, needs_vpn, "reconciling");
+    if needs_vpn {
+        let untrusted: Vec<&String> = ssids.iter().filter(|s| !allowlist.contains(*s)).collect();
+        if ssids.is_empty() {
+            tracing::info!("no WiFi — bringing VPN up");
+        } else {
+            tracing::info!(untrusted = ?untrusted, "untrusted network — bringing VPN up");
+        }
+    } else {
+        tracing::info!(ssids = ?ssids, "trusted network — bringing VPN down");
+    }
 
     *prev_ssids = ssids;
 
