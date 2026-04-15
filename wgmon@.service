@@ -12,5 +12,19 @@ StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=wgmon@%i
 
+# Hardening — wg-quick requires root for network interface management,
+# but we can restrict what the process can access beyond that.
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+LockPersonality=yes
+RestrictSUIDSGID=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+RestrictNamespaces=~user mnt pid ipc uts
+# Allow read access to WireGuard and wgmon configs.
+ReadOnlyPaths=/etc/wireguard /etc/wgmon
+
 [Install]
 WantedBy=multi-user.target
