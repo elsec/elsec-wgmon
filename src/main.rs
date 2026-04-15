@@ -1,7 +1,7 @@
 mod dbus;
 mod wgquick;
 
-use dbus::{get_connected_ssids, watch_station_changes};
+use dbus::{get_connected_ssids, watch_station_changes, watch_wake};
 use futures_util::StreamExt;
 use std::collections::HashSet;
 use zbus::Connection;
@@ -30,10 +30,22 @@ async fn main() -> anyhow::Result<()> {
     // Initial reconciliation
     reconcile(&conn, &profile, &allowlist, &mut prev_ssids).await?;
 
-    // Watch for changes
-    let mut stream = watch_station_changes(&conn).await?;
-    while stream.next().await.is_some() {
-        reconcile(&conn, &profile, &allowlist, &mut prev_ssids).await?;
+    let mut iwd_stream = watch_station_changes(&conn).await?;
+    let mut wake_stream = watch_wake(&conn).await?;
+
+    loop {
+        tokio::select! {
+            item = iwd_stream.next() => {
+                if item.is_none() { break; }
+                reconcile(&conn, &profile, &allowlist, &mut prev_ssids).await?;
+            }
+            item = wake_stream.next() => {
+                if item.is_none() { break; }
+                tracing::info!("system wake detected, forcing reconcile");
+                prev_ssids.clear();
+                reconcile(&conn, &profile, &allowlist, &mut prev_ssids).await?;
+            }
+        }
     }
 
     Ok(())

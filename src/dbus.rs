@@ -80,6 +80,29 @@ pub async fn get_connected_ssids(conn: &Connection) -> anyhow::Result<Vec<String
     Ok(ssids)
 }
 
+/// Returns a stream that yields () on system wake (logind PrepareForSleep false).
+pub async fn watch_wake(
+    conn: &Connection,
+) -> anyhow::Result<Pin<Box<dyn futures_util::Stream<Item = ()> + '_>>> {
+    let rule = MatchRule::builder()
+        .msg_type(MessageType::Signal)
+        .sender("org.freedesktop.login1")?
+        .interface("org.freedesktop.login1.Manager")?
+        .member("PrepareForSleep")?
+        .build();
+
+    let stream = MessageStream::for_match_rule(rule, conn, None).await?;
+
+    let filtered = stream.filter_map(|msg| async move {
+        let msg = msg.ok()?;
+        let sleeping: bool = msg.body().deserialize().ok()?;
+        // false = waking up, true = going to sleep
+        if sleeping { None } else { Some(()) }
+    });
+
+    Ok(Box::pin(filtered))
+}
+
 /// Returns a stream that yields () whenever an iwd Station property changes.
 pub async fn watch_station_changes(
     conn: &Connection,
