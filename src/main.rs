@@ -31,13 +31,31 @@ async fn main() -> anyhow::Result<()> {
 
     let conn = Connection::system().await?;
 
+    // Install the kill switch before anything else so there is no leak
+    // window if the daemon restarts while on an untrusted network.
+    killswitch::enable(&profile).await?;
+
+    let result = run(&conn, &profile, &allowlist).await;
+
+    // Always remove the kill switch on exit, whether clean or error.
+    tracing::info!("removing kill switch on exit");
+    killswitch::disable().await?;
+
+    result
+}
+
+async fn run(
+    conn: &Connection,
+    profile: &str,
+    allowlist: &HashSet<String>,
+) -> anyhow::Result<()> {
     let mut prev_ssids: HashSet<String> = HashSet::new();
 
     // Initial reconciliation
-    reconcile(&conn, &profile, &allowlist, &mut prev_ssids).await?;
+    reconcile(conn, profile, allowlist, &mut prev_ssids).await?;
 
-    let mut iwd_stream = watch_station_changes(&conn).await?;
-    let mut wake_stream = watch_wake(&conn).await?;
+    let mut iwd_stream = watch_station_changes(conn).await?;
+    let mut wake_stream = watch_wake(conn).await?;
     let mut watchdog = time::interval(WATCHDOG_INTERVAL);
     watchdog.tick().await; // discard the immediate first tick
     let mut sigterm = signal(SignalKind::terminate())?;
@@ -47,13 +65,13 @@ async fn main() -> anyhow::Result<()> {
         tokio::select! {
             item = iwd_stream.next() => {
                 if item.is_none() { break; }
-                reconcile(&conn, &profile, &allowlist, &mut prev_ssids).await?;
+                reconcile(conn, profile, allowlist, &mut prev_ssids).await?;
             }
             item = wake_stream.next() => {
                 if item.is_none() { break; }
                 tracing::info!("system wake detected, forcing reconcile");
                 prev_ssids.clear();
-                reconcile(&conn, &profile, &allowlist, &mut prev_ssids).await?;
+                reconcile(conn, profile, allowlist, &mut prev_ssids).await?;
             }
             _ = sigterm.recv() => {
                 tracing::info!("SIGTERM received, shutting down");
@@ -64,29 +82,26 @@ async fn main() -> anyhow::Result<()> {
                 break;
             }
             _ = watchdog.tick() => {
-                let vpn_should_be_up = needs_vpn(&prev_ssids, &allowlist);
-                match wgquick::latest_handshake_age(&profile).await {
+                let vpn_should_be_up = needs_vpn(&prev_ssids, allowlist);
+                match wgquick::latest_handshake_age(profile).await {
                     Some(age) => {
                         tracing::debug!(age_secs = age.as_secs(), "watchdog: handshake age");
                         if age > wgquick::HANDSHAKE_TIMEOUT {
                             tracing::warn!(age_secs = age.as_secs(), "peer silent, cycling tunnel");
                             prev_ssids.clear();
-                            reconcile(&conn, &profile, &allowlist, &mut prev_ssids).await?;
+                            reconcile(conn, profile, allowlist, &mut prev_ssids).await?;
                         }
                     }
                     None if vpn_should_be_up => {
                         tracing::warn!("tunnel unexpectedly down, reconciling");
                         prev_ssids.clear();
-                        reconcile(&conn, &profile, &allowlist, &mut prev_ssids).await?;
+                        reconcile(conn, profile, allowlist, &mut prev_ssids).await?;
                     }
                     None => {}
                 }
             }
         }
     }
-
-    tracing::info!("removing kill switch on exit");
-    killswitch::disable().await?;
 
     Ok(())
 }
