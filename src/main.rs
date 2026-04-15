@@ -25,13 +25,15 @@ async fn main() -> anyhow::Result<()> {
 
     let conn = Connection::system().await?;
 
+    let mut prev_ssids: HashSet<String> = HashSet::new();
+
     // Initial reconciliation
-    reconcile(&conn, &profile, &allowlist).await?;
+    reconcile(&conn, &profile, &allowlist, &mut prev_ssids).await?;
 
     // Watch for changes
     let mut stream = watch_station_changes(&conn).await?;
     while stream.next().await.is_some() {
-        reconcile(&conn, &profile, &allowlist).await?;
+        reconcile(&conn, &profile, &allowlist, &mut prev_ssids).await?;
     }
 
     Ok(())
@@ -41,8 +43,14 @@ async fn reconcile(
     conn: &Connection,
     profile: &str,
     allowlist: &HashSet<String>,
+    prev_ssids: &mut HashSet<String>,
 ) -> anyhow::Result<()> {
-    let ssids: Vec<String> = get_connected_ssids(conn).await?;
+    let ssids: HashSet<String> = get_connected_ssids(conn).await?.into_iter().collect();
+
+    if ssids == *prev_ssids {
+        tracing::debug!(ssids = ?ssids, "SSIDs unchanged, skipping");
+        return Ok(());
+    }
 
     // No WiFi → safe default: VPN up.
     // Any untrusted SSID → VPN up.
@@ -51,8 +59,10 @@ async fn reconcile(
 
     tracing::info!(ssids = ?ssids, needs_vpn, "reconciling");
 
+    *prev_ssids = ssids;
+
     if needs_vpn {
-        // Always cycle so WireGuard re-establishes over the current network.
+        // Cycle so WireGuard re-establishes over the current network.
         wgquick::wg_quick("down", profile).await?;
         wgquick::wg_quick("up", profile).await
     } else {
@@ -60,7 +70,7 @@ async fn reconcile(
     }
 }
 
-fn needs_vpn(ssids: &[String], allowlist: &HashSet<String>) -> bool {
+fn needs_vpn(ssids: &HashSet<String>, allowlist: &HashSet<String>) -> bool {
     ssids.is_empty() || ssids.iter().any(|s| !allowlist.contains(s))
 }
 
@@ -72,7 +82,7 @@ mod tests {
         names.iter().map(|s| s.to_string()).collect()
     }
 
-    fn ssids(names: &[&str]) -> Vec<String> {
+    fn ssids(names: &[&str]) -> HashSet<String> {
         names.iter().map(|s| s.to_string()).collect()
     }
 
