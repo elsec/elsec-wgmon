@@ -15,9 +15,18 @@ A daemon that monitors iwd D-Bus events and automatically brings WireGuard up or
 ## Installation
 
 ```bash
-cargo build --release
-sudo cp target/release/wgmon /usr/local/bin/
+sudo make install
 ```
+
+This builds the release binary, installs it to `/usr/local/bin/wgmon`, installs the systemd template unit, creates `/etc/wgmon/`, and reloads systemd.
+
+To uninstall:
+
+```bash
+sudo make uninstall
+```
+
+Config files in `/etc/wgmon/` are left intact on uninstall.
 
 ## Configuration
 
@@ -29,16 +38,7 @@ Create `/etc/wgmon/<profile>.toml` — one file per WireGuard profile:
 allowlist = ["HomeNetwork", "WorkNetwork"]
 ```
 
-## Systemd service
-
-Install the template unit:
-
-```bash
-sudo cp wgmon@.service /etc/systemd/system/
-sudo systemctl daemon-reload
-```
-
-Enable and start for a profile (e.g. `wg0`):
+## Enabling the service
 
 ```bash
 sudo systemctl enable --now wgmon@wg0.service
