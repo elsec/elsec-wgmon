@@ -56,6 +56,25 @@ pub async fn latest_handshake_age(profile: &str) -> Option<Duration> {
         .min() // most recent handshake across all peers
 }
 
+/// Returns the subset of interfaces whose latest handshake is stale or missing.
+pub async fn stale_interfaces(interfaces: &std::collections::HashSet<String>) -> std::collections::HashSet<String> {
+    let mut stale = std::collections::HashSet::new();
+    for iface in interfaces {
+        match latest_handshake_age(iface).await {
+            Some(age) if age > HANDSHAKE_TIMEOUT => {
+                tracing::warn!(iface, age_secs = age.as_secs(), "peer silent");
+                stale.insert(iface.clone());
+            }
+            None => {
+                tracing::warn!(iface, "tunnel unexpectedly down or no handshake");
+                stale.insert(iface.clone());
+            }
+            Some(_) => {}
+        }
+    }
+    stale
+}
+
 pub fn is_idempotent_error(action: &str, stderr: &str) -> bool {
     (action == "up" && stderr.contains("already exists"))
         || (action == "down" && stderr.contains("is not a WireGuard interface"))

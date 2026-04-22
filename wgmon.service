@@ -1,16 +1,16 @@
 [Unit]
-Description=WireGuard auto-connect for %i based on WiFi SSID (via iwd)
+Description=WireGuard auto-connect daemon based on WiFi SSID (via iwd)
 After=iwd.service network.target
 Wants=iwd.service
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/wgmon %i
+ExecStart=/usr/local/bin/wgmon
 Restart=on-failure
 RestartSec=5s
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=wgmon@%i
+SyslogIdentifier=wgmon
 
 # Hardening — wg-quick requires root for network interface management,
 # but we can restrict what the process can access beyond that.
