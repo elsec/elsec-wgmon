@@ -12,6 +12,10 @@
 pub fn peer_port(profile: &str) -> Option<u16> {
     let path = format!("/etc/wireguard/{profile}.conf");
     let contents = std::fs::read_to_string(path).ok()?;
+    peer_port_from_str(&contents)
+}
+
+fn peer_port_from_str(contents: &str) -> Option<u16> {
     for line in contents.lines() {
         let line = line.trim();
         if let Some(rest) = line.strip_prefix("Endpoint") {
@@ -128,23 +132,34 @@ impl SpawnExt for tokio::process::Child {
 
 #[cfg(test)]
 mod tests {
+    use super::peer_port_from_str;
+
     #[test]
     fn port_parsed_from_ipv4_endpoint() {
-        assert_eq!(parse_port("1.2.3.4:51820"), Some(51820));
+        assert_eq!(peer_port_from_str("Endpoint = 1.2.3.4:51820"), Some(51820));
     }
 
     #[test]
     fn port_parsed_from_ipv6_endpoint() {
-        assert_eq!(parse_port("[::1]:51820"), Some(51820));
+        assert_eq!(peer_port_from_str("Endpoint = [::1]:51820"), Some(51820));
     }
 
     #[test]
     fn port_parsed_from_hostname_endpoint() {
-        assert_eq!(parse_port("vpn.example.com:51820"), Some(51820));
+        assert_eq!(
+            peer_port_from_str("Endpoint = vpn.example.com:51820"),
+            Some(51820)
+        );
     }
 
-    // Helper that mirrors the parsing logic in peer_port().
-    fn parse_port(endpoint: &str) -> Option<u16> {
-        endpoint.rsplit(':').next()?.parse().ok()
+    #[test]
+    fn port_parsed_from_full_config() {
+        let conf = "[Interface]\nPrivateKey = abc\n\n[Peer]\nPublicKey = xyz\nEndpoint = vpn.example.com:1234\nAllowedIPs = 0.0.0.0/0\n";
+        assert_eq!(peer_port_from_str(conf), Some(1234));
+    }
+
+    #[test]
+    fn no_endpoint_returns_none() {
+        assert_eq!(peer_port_from_str("[Interface]\nPrivateKey = abc\n"), None);
     }
 }
