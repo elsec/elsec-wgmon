@@ -11,6 +11,7 @@ use tokio::time;
 use zbus::Connection;
 
 const WATCHDOG_INTERVAL: Duration = Duration::from_secs(60);
+const DEBOUNCE_DELAY: Duration = Duration::from_secs(3);
 
 #[derive(serde::Deserialize)]
 struct Config {
@@ -69,16 +70,24 @@ async fn run(
     watchdog.tick().await; // discard the immediate first tick
     let mut sigterm = signal(SignalKind::terminate())?;
     let mut sigint = signal(SignalKind::interrupt())?;
+    let debounce = time::sleep(Duration::MAX);
+    tokio::pin!(debounce);
 
     loop {
         tokio::select! {
             item = iwd_stream.next() => {
                 if item.is_none() { break; }
+                tracing::debug!("network change detected, debouncing");
+                debounce.as_mut().reset(tokio::time::Instant::now() + DEBOUNCE_DELAY);
+            }
+            _ = &mut debounce => {
+                debounce.as_mut().reset(tokio::time::Instant::now() + Duration::MAX);
                 reconcile(conn, profile, allowlist, &mut prev_ssids).await?;
             }
             item = wake_stream.next() => {
                 if item.is_none() { break; }
                 tracing::info!("system wake detected, forcing reconcile");
+                debounce.as_mut().reset(tokio::time::Instant::now() + Duration::MAX);
                 prev_ssids.clear();
                 reconcile(conn, profile, allowlist, &mut prev_ssids).await?;
             }
