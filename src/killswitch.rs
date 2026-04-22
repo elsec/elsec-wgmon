@@ -28,13 +28,18 @@ fn peer_port_from_str(contents: &str) -> Option<u16> {
     None
 }
 
+fn table_name(profile: &str) -> String {
+    format!("wgmon_{profile}")
+}
+
 pub async fn enable(profile: &str) -> anyhow::Result<()> {
     let port = peer_port(profile).unwrap_or(51820);
+    let table = table_name(profile);
 
     // Build the full ruleset as a single atomic nft script.
     let script = format!(
         r#"
-table inet wgmon {{
+table inet {table} {{
     chain input {{
         type filter hook input priority -100; policy drop;
         iifname lo accept
@@ -58,9 +63,9 @@ table inet wgmon {{
 "#
     );
 
-    // Delete any existing wgmon table first (idempotent).
+    // Delete any existing table for this profile first (idempotent).
     let _ = tokio::process::Command::new("nft")
-        .args(["delete", "table", "inet", "wgmon"])
+        .args(["delete", "table", "inet", &table])
         .output()
         .await;
 
@@ -82,9 +87,11 @@ table inet wgmon {{
     Ok(())
 }
 
-pub async fn disable() -> anyhow::Result<()> {
+pub async fn disable(profile: &str) -> anyhow::Result<()> {
+    let table = table_name(profile);
+
     let exists = tokio::process::Command::new("nft")
-        .args(["list", "table", "inet", "wgmon"])
+        .args(["list", "table", "inet", &table])
         .output()
         .await?
         .status
@@ -96,7 +103,7 @@ pub async fn disable() -> anyhow::Result<()> {
     }
 
     let output = tokio::process::Command::new("nft")
-        .args(["delete", "table", "inet", "wgmon"])
+        .args(["delete", "table", "inet", &table])
         .output()
         .await?;
 

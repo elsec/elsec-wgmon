@@ -49,7 +49,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Always remove the kill switch on exit, whether clean or error.
     tracing::info!("removing kill switch on exit");
-    killswitch::disable().await?;
+    killswitch::disable(&profile).await?;
 
     result
 }
@@ -162,7 +162,7 @@ async fn reconcile(
         wgquick::wg_quick("up", profile).await
     } else {
         wgquick::wg_quick("down", profile).await?;
-        killswitch::disable().await
+        killswitch::disable(profile).await
     }
 }
 
