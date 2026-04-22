@@ -79,6 +79,18 @@ table inet wgmon {{
 }
 
 pub async fn disable() -> anyhow::Result<()> {
+    let exists = tokio::process::Command::new("nft")
+        .args(["list", "table", "inet", "wgmon"])
+        .output()
+        .await?
+        .status
+        .success();
+
+    if !exists {
+        tracing::debug!("kill switch already disabled");
+        return Ok(());
+    }
+
     let output = tokio::process::Command::new("nft")
         .args(["delete", "table", "inet", "wgmon"])
         .output()
@@ -86,11 +98,6 @@ pub async fn disable() -> anyhow::Result<()> {
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        // Table not existing is fine — nothing to remove.
-        if stderr.contains("No such file or directory") || stderr.contains("table not found") {
-            tracing::debug!("kill switch already disabled");
-            return Ok(());
-        }
         anyhow::bail!("nft disable killswitch failed: {stderr}");
     }
 
