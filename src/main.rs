@@ -13,8 +13,9 @@ use zbus::Connection;
 const WATCHDOG_INTERVAL: Duration = Duration::from_secs(60);
 const DEBOUNCE_DELAY: Duration = Duration::from_secs(3);
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, Default)]
 struct Config {
+    #[serde(default)]
     allowlist: Vec<String>,
 }
 
@@ -27,7 +28,11 @@ async fn main() -> anyhow::Result<()> {
         .expect("Usage: wgmon <profile>");
 
     let config_path = format!("/etc/wgmon/{profile}.toml");
-    let config: Config = toml::from_str(&std::fs::read_to_string(&config_path)?)?;
+    let config: Config = match std::fs::read_to_string(&config_path) {
+        Ok(s) => toml::from_str(&s)?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Config::default(),
+        Err(e) => return Err(e.into()),
+    };
     let allowlist: HashSet<String> = config.allowlist.into_iter().collect();
 
     let conn = Connection::system().await?;
