@@ -1,16 +1,17 @@
 # wgmon
 
-A daemon that monitors iwd D-Bus events and automatically brings WireGuard up or down based on the connected WiFi SSID.
+A daemon that monitors iwd D-Bus events and automatically brings WireGuard interfaces up or down based on the connected WiFi SSID.
 
-- **Untrusted network** (or no WiFi) → `wg-quick up <profile>`
-- **Allowlisted (trusted) network** → `wg-quick down <profile>`
-- **Network switch** → cycles the tunnel so WireGuard re-establishes with the new route
+- **Untrusted network** (or no WiFi) → brings up the configured `wg-quick` interfaces
+- **Trusted network** → brings them down
+- **Network switch** → cycles the tunnel so WireGuard re-establishes over the new route
+- **Kill switch** → nftables rules block all non-VPN traffic while any tunnel is active, preventing leaks during cycling
 
 ## Requirements
 
 - [iwd](https://iwd.wiki.kernel.org/) as the WiFi manager
 - `wg-quick` (from the `wireguard-tools` package)
-- A working WireGuard config at `/etc/wireguard/<profile>.conf`
+- WireGuard configs at `/etc/wireguard/<interface>.conf`
 
 ## Installation
 
@@ -18,7 +19,7 @@ A daemon that monitors iwd D-Bus events and automatically brings WireGuard up or
 sudo make install
 ```
 
-This builds the release binary, installs it to `/usr/local/bin/wgmon`, installs the systemd template unit, creates `/etc/wgmon/`, and reloads systemd.
+This builds the release binary, installs it to `/usr/local/bin/wgmon`, installs the systemd unit, creates `/etc/wgmon/`, and reloads systemd.
 
 To uninstall:
 
@@ -30,41 +31,55 @@ Config files in `/etc/wgmon/` are left intact on uninstall.
 
 ## Configuration
 
-Create `/etc/wgmon/<profile>.toml` — one file per WireGuard profile:
+Create `/etc/wgmon/wgmon.toml`:
 
 ```toml
-# SSIDs where WireGuard will NOT connect (trusted networks).
-# On all other SSIDs, or when WiFi is disconnected, WireGuard comes up.
-allowlist = ["HomeNetwork", "WorkNetwork"]
+[[wlan]]
+ssid = "HomeNetwork"
+wg-quick = []              # trusted — no VPN
+
+[[wlan]]
+ssid = "WorkNetwork"
+wg-quick = ["wg1"]         # split-tunnel: only work VPN
+
+[default.wlan]
+wg-quick = ["wg0"]         # any other WiFi or no WiFi → home VPN
+
+[default.ether]
+wg-quick = []              # ethernet is trusted (not yet monitored)
+
+[default.wwan]
+wg-quick = ["wg0"]         # mobile connection → home VPN (not yet monitored)
 ```
+
+**Matching rules:**
+- Each connected SSID is matched against `[[wlan]]` rules in order — first match wins
+- `wg-quick = []` means trusted (no VPN for that network)
+- Unmatched SSIDs use the `[default.wlan]` rule; if absent, all configured interfaces come up (fail-secure)
+- When connected to multiple SSIDs simultaneously, the union of matched interfaces is used
+- All interfaces listed in the config must have a corresponding `/etc/wireguard/<name>.conf` — wgmon errors at startup if any are missing
 
 ## Enabling the service
 
 ```bash
-sudo systemctl enable --now wgmon@wg0.service
+sudo systemctl enable --now wgmon.service
 ```
 
-> **Note:** disable `wg-quick@wg0.service` if it's enabled — `wgmon` takes over managing the tunnel and they will conflict.
->
+> **Note:** disable `wg-quick@<interface>.service` for any interface wgmon manages — they will conflict:
 > ```bash
 > sudo systemctl disable --now wg-quick@wg0.service
 > ```
 
-Multiple profiles are independent:
-
-```bash
-sudo systemctl enable --now wgmon@wg0.service
-sudo systemctl enable --now wgmon@wg1.service
-```
-
 ## Logs
 
 ```bash
-journalctl -u wgmon@wg0 -f
+journalctl -u wgmon -f
 ```
 
 ## How it works
 
-On startup `wgmon` connects to the system D-Bus and queries iwd's `ObjectManager` to find all connected stations and their SSIDs. It then subscribes to `PropertiesChanged` signals on `net.connman.iwd.Station` and re-evaluates on every `State` or `ConnectedNetwork` change.
+On startup wgmon reads `/etc/wgmon/wgmon.toml`, validates that all configured interfaces have WireGuard configs, then connects to the system D-Bus and queries iwd's `ObjectManager` for currently connected SSIDs. It subscribes to `PropertiesChanged` signals on `net.connman.iwd.Station` and reconciles on every network state change.
 
-**Reconciliation policy**: any connected SSID not in the allowlist → VPN up. If no WiFi at all → VPN up (safe default). All connected SSIDs are trusted → VPN down. On any SSID change while VPN is needed, the tunnel is cycled (`down` then `up`) to force a fresh handshake over the new network.
+Changes are debounced by 3 seconds to avoid spurious cycling on momentary drops. System wake events (via `org.freedesktop.login1`) bypass the debounce and trigger an immediate reconcile. A watchdog runs every 60 seconds and cycles any interface whose WireGuard handshake has gone silent.
+
+The nftables kill switch is installed before any tunnel is brought up and removed only after all tunnels are down, ensuring there is no window where traffic can leak unprotected.
